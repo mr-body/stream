@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="pt">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Terminal SSH</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm/css/xterm.css" />
+    <script src="https://cdn.jsdelivr.net/npm/xterm/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
+
+    <style>
+        body,
+        html {
+            margin: 0;
+            height: 100%;
+            background: #1e1e1e;
+            display: flex;
+            flex-direction: column;
+            color: #fff;
+            font-family: monospace;
+        }
+
+        #form-container {
+            padding: 10px;
+            background: #2e2e2e;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
+            border-bottom: 2px solid #444;
+        }
+
+        #terminal {
+            flex: 1;
+            padding: 5px;
+        }
+
+        input,
+        textarea {
+            padding: 8px;
+            background: #1e1e1e;
+            color: #fff;
+            border: 1px solid #555;
+            border-radius: 3px;
+            font-family: monospace;
+        }
+
+        textarea {
+            width: 300px;
+            height: 100px;
+            resize: none;
+        }
+
+        button {
+            padding: 8px 15px;
+            background: #007acc;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        button:hover {
+            background: #005a9e;
+        }
+
+        #disconnectBtn {
+            background: #dc3545;
+        }
+
+        #disconnectBtn:hover {
+            background: #c82333;
+        }
+
+        .xterm .xterm-viewport {
+            overflow-y: auto !important;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="form-container">
+        <input type="text" id="host" placeholder="Host" value="127.0.0.1">
+        <input type="text" id="port" placeholder="Porta" value="22">
+        <input type="text" id="user" placeholder="Usuário" value="root">
+
+        <label><input type="radio" name="auth" value="password" checked> Senha</label>
+        <label><input type="radio" name="auth" value="key"> Chave</label>
+
+        <input type="password" id="password" placeholder="Senha">
+        <textarea id="privateKey" placeholder="-----BEGIN KEY-----"></textarea>
+
+        <button id="connectBtn">Conectar</button>
+        <button id="disconnectBtn" disabled>Desconectar</button>
+    </div>
+
+    <div id="terminal"></div>
+
+    <script>
+        const term = new Terminal({
+            cursorBlink: true,
+            fontSize: 14,
+            theme: { background: '#1e1e1e', foreground: '#fff' }
+        });
+        const fitAddon = new FitAddon.FitAddon();
+        term.loadAddon(fitAddon);
+        term.open(document.getElementById("terminal"));
+        fitAddon.fit();
+
+        let socket = null;
+        let connected = false;
+
+        function toggleAuth() {
+            const mode = document.querySelector('input[name="auth"]:checked').value;
+            document.getElementById("password").style.display = mode === "password" ? "inline-block" : "none";
+            document.getElementById("privateKey").style.display = mode === "key" ? "inline-block" : "none";
+        }
+        document.querySelectorAll('input[name="auth"]').forEach(e => e.addEventListener('change', toggleAuth));
+        toggleAuth();
+
+        function connect() {
+            if (connected) return;
+
+            const hostInput = document.getElementById("host").value.trim();
+            const port = parseInt(document.getElementById("port").value.trim());
+            const user = document.getElementById("user").value.trim();
+            const auth = document.querySelector('input[name="auth"]:checked').value;
+
+            let password = "", privateKey = "";
+
+            if (auth === "password") {
+                password = document.getElementById("password").value;
+                if (!password) return alert("Insira a senha.");
+            } else {
+                privateKey = document.getElementById("privateKey").value.trim();
+                if (!privateKey) return alert("Insira a chave privada.");
+            }
+
+            if (!hostInput || !port || !user) return alert("Preencha todos os campos!");
+
+            term.clear();
+            term.write("\x1b[33mConectando...\x1b[0m\r\n");
+
+            socket = new WebSocket("ws://localhost:3004/ws");
+            socket.binaryType = "arraybuffer";
+
+            socket.onopen = () => {
+                connected = true;
+                term.write("\x1b[32m✓ WebSocket conectado\x1b[0m\r\n");
+
+                socket.send(JSON.stringify({
+                    host: hostInput,
+                    port,
+                    user,
+                    password,
+                    privateKey
+                }));
+
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+            };
+
+            socket.onmessage = (ev) => {
+                if (ev.data instanceof ArrayBuffer) {
+                    const text = new TextDecoder().decode(new Uint8Array(ev.data));
+                    term.write(text);
+                } else {
+                    term.write(ev.data);
+                }
+            };
+
+            socket.onerror = () => {
+                term.write("\r\n\x1b[31mErro no WebSocket\x1b[0m\r\n");
+                disconnect();
+            };
+
+            socket.onclose = () => {
+                term.write("\r\n\x1b[33mConexão encerrada\x1b[0m\r\n");
+                disconnect();
+            };
+
+            term.onData((data) => {
+                if (connected && socket.readyState === WebSocket.OPEN) {
+                    socket.send(new TextEncoder().encode(data));
+                }
+            });
+
+            term.onResize((size) => {
+                if (connected && socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({
+                        type: "resize",
+                        cols: size.cols,
+                        rows: size.rows
+                    }));
+                }
+            });
+        }
+
+
+        function disconnect() {
+            if (socket) socket.close();
+            socket = null;
+            connected = false;
+
+            connectBtn.disabled = false;
+            disconnectBtn.disabled = true;
+        }
+
+        connectBtn.onclick = connect;
+        disconnectBtn.onclick = disconnect;
+        window.addEventListener("resize", () => fitAddon.fit());
+    </script>
+
+</body>
+
+</html>
