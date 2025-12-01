@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package sshService;
+
+option go_package = "sshgrpc/sshpb";
+
+service SSH {
+  // Executa um comando único via SSH
+  rpc ExecCommand(SSHRequest) returns (SSHResponse);
+}
+
+message SSHRequest {
+  string host       = 1;
+  int32  port       = 2;
+  string user       = 3;
+  string password   = 4;  // pode ser vazio se usar chave
+  string privateKey = 5;  // opcional
+  string command    = 6;
+}
+
+message SSHResponse {
+  string stdout = 1;
+  string stderr = 2;
+  int32 exitCode = 3;
+}
